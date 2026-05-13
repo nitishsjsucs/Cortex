@@ -1,3 +1,16 @@
+## CMPE 258 Deep Learning Group Project
+
+**Submitted by:** Nitish Ratakonda, Prachi Gupta, Shilpa Yelkur Ramakrishnaiah & Pranjal Shrivastava
+
+| Deliverable | Link |
+|-------------|------|
+| 📊 Presentation Slide Deck | [View Slides](https://docs.google.com/presentation/d/1_RzOm1TTlUI0UAGcfO95gd29OHULT7cW/edit?usp=drive_link&ouid=114263394935670902441&rtpof=true&sd=true) |
+| 🎥 Presentation Recording | [Watch Recording](https://drive.google.com/file/d/1WK-cSU3JPtxG6dgNAnY9PLtf7e1Id1bB/view?usp=sharing) |
+| 🖥️ Demo Recording | [Watch Demo](https://drive.google.com/file/d/1mMHITySSFM3o8TyHA1bn3pufjaH8x5OE/view?usp=sharing) |
+| 📄 Project Report | [Read Report](https://drive.google.com/file/d/1DYjke61Fh-29jsdQHT62mVj1J6EW7UX2/view?usp=sharing) |
+
+---
+
 <div align="center">
 
 # 🔬 Cortex
