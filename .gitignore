@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+apps/web/node_modules/
+*.egg-info/
+dist/
+build/
+apps/web/build/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# ML model weights (too large for GitHub)
+*.pt
+*.pth
+*.bin
+*.safetensors
+ml/outputs/
+mlruns/
+
+# Data
+ml/data/arxiv.csv
+ml/outputs/predictions.db
+
+# System
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+# Logs
+.logs/
+*.log
+
+# Temp / editor
+.vscode/
+.idea/
+*.swp
+REPORT.html
+apps/web/test-results/

@@ -1,0 +1,111 @@
+name: Ablation Studies & Hyperparameter Sweep
+
+on:
+  schedule:
+    # Run weekly on Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      studies:
+        description: 'Ablation studies to run (space-separated, e.g. A_freeze_depth B_adaptation_layers)'
+        required: false
+        default: 'A_freeze_depth B_adaptation_layers E_focal_vs_ce F_dropout'
+      ablation_epochs:
+        description: 'Quick-train epochs per condition'
+        required: false
+        default: '3'
+      sweep_trials:
+        description: 'Number of Optuna sweep trials'
+        required: false
+        default: '10'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  ablation:
+    name: Run Ablation Studies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Generate training data
+        run: |
+          python -c "
+          from ml.data.arxiv_loader import _generate_synthetic_data
+          from pathlib import Path
+          Path('ml/data').mkdir(parents=True, exist_ok=True)
+          df = _generate_synthetic_data(n=1500)
+          df.to_csv('ml/data/arxiv.csv', index=False)
+          print(f'Generated {len(df)} training samples for ablation')
+          "
+
+      - name: Run ablation studies
+        run: |
+          python -m ml.evaluation.ablation \
+            --config ml/training/config.yaml \
+            --study ${{ github.event.inputs.studies || 'A_freeze_depth B_adaptation_layers E_focal_vs_ce F_dropout' }} \
+            --epochs ${{ github.event.inputs.ablation_epochs || '3' }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Upload ablation MLflow runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ablation-mlruns-${{ github.run_id }}
+          path: mlruns/
+          retention-days: 60
+
+  sweep:
+    name: Hyperparameter Sweep
+    runs-on: ubuntu-latest
+    needs: ablation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Generate training data
+        run: |
+          python -c "
+          from ml.data.arxiv_loader import _generate_synthetic_data
+          from pathlib import Path
+          Path('ml/data').mkdir(parents=True, exist_ok=True)
+          df = _generate_synthetic_data(n=1500)
+          df.to_csv('ml/data/arxiv.csv', index=False)
+          "
+
+      - name: Run hyperparameter sweep
+        run: |
+          python -m ml.experiments.run_sweep \
+            --config ml/training/config.yaml \
+            --n_trials ${{ github.event.inputs.sweep_trials || '10' }} \
+            --sweep_epochs 3 \
+            --storage sqlite:///ml/outputs/sweep.db
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Upload sweep artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-artifacts-${{ github.run_id }}
+          path: |
+            ml/outputs/sweep.db
+            ml/outputs/best_sweep_params.yaml
+          retention-days: 60

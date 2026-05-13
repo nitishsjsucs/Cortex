@@ -1,0 +1,74 @@
+# Cortex Research Intelligence Model v2.0 — Training Configuration
+# Incorporates 2024-2026 research advances (see ml/models/components.py for refs)
+
+# ── Backbone ──────────────────────────────────────────────────────────────────
+# Primary: answerdotai/ModernBERT-base  (Warner et al., 2024; arXiv:2412.13663)
+# Fallback: microsoft/deberta-v3-base  (He et al., 2023)
+# Fallback2: distilbert-base-uncased   (lightweight, always available)
+pretrained_model: "distilbert-base-uncased"
+
+# ── Architecture ──────────────────────────────────────────────────────────────
+num_adaptation_layers: 3       # ModernAdaptationLayer blocks (RoPE+LoRA+SwiGLU)
+lora_rank:             16      # LoRA rank r  — Hu et al., ICLR 2022
+lora_alpha:            32.0    # LoRA scaling α (effective scale = α/r = 2.0)
+num_heads:             12      # Attention heads in adaptation layers
+dropout:               0.15    # Attention + FFN dropout
+drop_path_rate:        0.1     # Stochastic depth max rate — Huang et al., 2016
+freeze_backbone_layers: 2      # Freeze first N backbone layers (ablation A)
+cla_layers:            4       # Cross-layer aggregation: mix last K layers
+proj_dim:              128     # Supervised Contrastive projection dimension
+use_alternating_attention: true  # Alternate local/global attention (ModernBERT)
+window_size:           64      # Local attention window tokens
+
+# ── Training schedule ─────────────────────────────────────────────────────────
+num_epochs:                  10
+batch_size:                  32
+gradient_accumulation_steps: 2    # Effective batch = 64
+learning_rate:               2.0e-5
+backbone_lr_multiplier:      0.05  # Backbone LR = LR × 0.05 (protect pre-training)
+lora_lr_multiplier:          2.0   # LoRA LR = LR × 2.0  (fast adaptation)
+weight_decay:                0.01
+warmup_ratio:                0.1
+max_grad_norm:                1.0
+fp16:                        false
+bf16:                        false  # Set true if A100/H100 GPU available
+gradient_checkpointing:      false  # Set true for memory-constrained GPUs
+
+# Multi-stage unfreeze epochs (ULMFiT-style) — Howard & Ruder, ACL 2018
+unfreeze_schedule: [3, 6]
+
+# ── EMA ───────────────────────────────────────────────────────────────────────
+# Exponential Moving Average — Polyak & Juditsky 1992
+use_ema:    true
+ema_decay:  0.9995   # Higher = smoother but slower to track model
+ema_warmup: 2000     # Steps before reaching target decay
+
+# ── Loss functions ────────────────────────────────────────────────────────────
+focal_gamma:         2.0   # Focal Loss γ  — Lin et al., ICCV 2017
+label_smoothing:     0.1   # Label smoothing ε — Szegedy et al., CVPR 2016
+lambda_supcon:       0.3   # SupCon weight — Khosla et al., NeurIPS 2020
+lambda_mrl:          0.5   # Matryoshka MRL weight — Kusupati et al., NeurIPS 2022
+lambda_rank:         0.3   # Soft Spearman rank loss weight
+supcon_warmup_steps: 500   # Steps to linearly ramp SupCon from 0 → λ
+use_learnable_task_weights: true  # Kendall et al. uncertainty weighting
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+max_sequence_length: 256
+train_size:          0.8
+val_size:            0.1
+num_workers:         0     # 0 = main process (safe on macOS)
+data_path:           "ml/data/arxiv.csv"
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output_dir:     "ml/outputs"
+model_save_dir: "ml/outputs/models"
+
+# ── MLflow ────────────────────────────────────────────────────────────────────
+mlflow_tracking_uri:    "mlruns"
+mlflow_experiment_name: "research-intelligence-v2"
+run_name: null
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+seed:                42
+log_steps:           10
+eval_every_n_epochs: 1

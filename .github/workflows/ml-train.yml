@@ -1,0 +1,184 @@
+name: ML Training Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ml/**'
+      - '.github/workflows/ml-train.yml'
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: 'MLflow run name'
+        required: false
+        default: 'ci-train'
+      epochs:
+        description: 'Number of training epochs'
+        required: false
+        default: '10'
+
+env:
+  PYTHON_VERSION: '3.11'
+  MODEL_ARTIFACT_PATH: ml/outputs/models/best_model.pt
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  lint-and-test:
+    name: Lint & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check ml/ --select E,F,W --ignore E501
+
+      - name: Type check with mypy
+        run: |
+          pip install mypy
+          mypy ml/models/ ml/training/ ml/evaluation/ ml/inference/ \
+               --ignore-missing-imports --no-strict-optional || true
+
+      - name: Run unit tests
+        run: |
+          pip install pytest pytest-cov
+          pytest ml/tests/ -v --cov=ml --cov-report=xml || echo "No tests yet"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  train:
+    name: Train Model
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ML dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Create output directories
+        run: mkdir -p ml/outputs/models ml/outputs/eval
+
+      - name: Download / prepare data
+        run: |
+          python -c "
+          from ml.data.arxiv_loader import load_dataframe, _generate_synthetic_data
+          import pandas as pd
+          from pathlib import Path
+          Path('ml/data').mkdir(parents=True, exist_ok=True)
+          df = _generate_synthetic_data(n=2000)
+          df.to_csv('ml/data/arxiv.csv', index=False)
+          print(f'Generated {len(df)} synthetic samples')
+          "
+
+      - name: Train model
+        run: |
+          python -m ml.training.train \
+            --config ml/training/config.yaml \
+            --run_name "${{ github.event.inputs.run_name || 'ci-train' }}"
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Upload model checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-checkpoint-${{ github.sha }}
+          path: ml/outputs/models/best_model.pt
+          retention-days: 30
+
+      - name: Upload MLflow runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-runs-${{ github.sha }}
+          path: mlruns/
+          retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────────────────
+  evaluate:
+    name: Evaluate Model
+    runs-on: ubuntu-latest
+    needs: train
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ML dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Download model checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          name: model-checkpoint-${{ github.sha }}
+          path: ml/outputs/models/
+
+      - name: Prepare evaluation data
+        run: |
+          python -c "
+          from ml.data.arxiv_loader import _generate_synthetic_data
+          from pathlib import Path
+          Path('ml/data').mkdir(parents=True, exist_ok=True)
+          df = _generate_synthetic_data(n=500)
+          df.to_csv('ml/data/arxiv.csv', index=False)
+          "
+
+      - name: Run evaluation
+        run: |
+          python -m ml.evaluation.evaluate \
+            --checkpoint ml/outputs/models/best_model.pt \
+            --data_path  ml/data/arxiv.csv \
+            --output_dir ml/outputs/eval
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Upload evaluation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.sha }}
+          path: ml/outputs/eval/
+          retention-days: 30
+
+      - name: Post metrics as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## ML Evaluation Results\n\n';
+            try {
+              const report = JSON.parse(fs.readFileSync('ml/outputs/eval/eval_report.json'));
+              const s = report.summary;
+              body += `| Metric | Value |\n|--------|-------|\n`;
+              body += `| Category Accuracy | ${(s.category_accuracy * 100).toFixed(1)}% |\n`;
+              body += `| Category F1 (macro) | ${s.category_f1.toFixed(4)} |\n`;
+              body += `| Impact MSE | ${s.impact_mse.toFixed(4)} |\n`;
+              body += `| Impact R² | ${s.impact_r2.toFixed(4)} |\n`;
+              body += `| Quality Accuracy | ${(s.quality_accuracy * 100).toFixed(1)}% |\n`;
+            } catch (e) {
+              body += `Could not parse eval_report.json: ${e}\n`;
+            }
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

@@ -1,0 +1,107 @@
+name: Model Serving & Inference API
+
+on:
+  workflow_run:
+    workflows: ["ML Training Pipeline"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [staging, production]
+
+jobs:
+  build-api-image:
+    name: Build & Push Inference API Image
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download model checkpoint
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          name: model-checkpoint-${{ github.event.workflow_run.head_sha }}
+          path: ml/outputs/models/
+        continue-on-error: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build inference API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file:    ml/docker/Dockerfile.inference
+          push:    false
+          tags:    cortex-research-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  smoke-test-api:
+    name: Smoke-test Inference API
+    runs-on: ubuntu-latest
+    needs: build-api-image
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r ml/requirements.txt
+
+      - name: Start FastAPI server (background)
+        run: |
+          uvicorn ml.inference.api:app --host 127.0.0.1 --port 8001 &
+          sleep 8          # let it fully start
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          MODEL_CHECKPOINT: ml/outputs/models/best_model.pt
+
+      - name: Health check
+        run: |
+          curl -sf http://127.0.0.1:8001/health | python3 -c "
+          import json, sys
+          r = json.load(sys.stdin)
+          assert r['status'] == 'ok', f'Health check failed: {r}'
+          print('Health check passed:', r)
+          "
+
+      - name: Predict endpoint smoke test
+        run: |
+          curl -sf -X POST http://127.0.0.1:8001/predict \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "title": "Attention Is All You Need",
+              "abstract": "We propose a novel Transformer architecture based solely on attention mechanisms. Our model achieves 28.4 BLEU on WMT 2014 English-to-German, improving over the best results by over 2 BLEU with 12 attention heads."
+            }' | python3 -c "
+          import json, sys
+          r = json.load(sys.stdin)
+          assert 'predicted_category' in r, 'Missing predicted_category'
+          assert 'impact_score' in r, 'Missing impact_score'
+          assert 'quality_label' in r, 'Missing quality_label'
+          print('Predict smoke test passed:', r['predicted_category'])
+          "
+
+      - name: Gradio demo smoke test
+        run: |
+          python3 -c "
+          # Import-only smoke test (no actual launch)
+          import ml.gradio_demo as demo_module
+          print('Gradio demo module imports OK')
+          # Verify demo block is buildable
+          assert hasattr(demo_module, 'demo'), 'demo Blocks not found'
+          print('Gradio Blocks object found')
+          "
+        env:
+          PYTHONPATH: ${{ github.workspace }}
